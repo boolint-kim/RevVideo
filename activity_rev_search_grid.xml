@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:id="@+id/main"
+    android:background="@color/activity_background"
+    tools:context=".RevSearchGridActivity">
+
+    <!-- 상단 ActionBar -->
+    <LinearLayout
+        android:id="@+id/layout_actionbar"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/title_bar_height"
+        android:background="@android:color/transparent"
+        android:padding="5dp"
+        android:orientation="horizontal"
+        android:elevation="8dp"
+        android:gravity="center_vertical" >
+
+        <!-- 홈 화살표 -->
+        <ImageView
+            android:id="@+id/iv_home"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:paddingHorizontal="4dp"
+            android:src="@drawable/ic_arrow_back_24"
+            app:tint="?attr/colorOnSurface"
+            android:background="?attr/selectableItemBackgroundBorderless" />
+
+        <!-- 타이틀 텍스트 -->
+        <TextView
+            android:id="@+id/tv_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:paddingHorizontal="8dp"
+            android:singleLine="true"
+            android:text="위성영상"
+            android:textSize="@dimen/title_text_size" />
+
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:orientation="vertical"
+        android:layout_weight="1">
+
+        <RelativeLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <com.boolint.camlocation.ZoomGridView
+                android:id="@+id/gr_grid_view"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:numColumns="2"
+                android:paddingTop="4dp">
+            </com.boolint.camlocation.ZoomGridView>
+
+            <LinearLayout
+                android:id="@+id/ll_progress"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone"
+                android:gravity="center"
+                android:background="#777777">
+                <ProgressBar
+                    style="?android:attr/progressBarStyle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:indeterminateTint="@color/colorPrimary"/>
+            </LinearLayout>
+        </RelativeLayout>
+
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/ll_ads"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <FrameLayout
+            android:id="@+id/fl_banner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+    </LinearLayout>
+
+
+</LinearLayout>
