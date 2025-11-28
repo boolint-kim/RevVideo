@@ -1,13 +1,9 @@
 package com.boolint.camlocation;
 
-import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.res.Configuration;
-import android.graphics.Bitmap;
 import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
-import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -17,17 +13,11 @@ import android.util.SparseArray;
 import android.util.SparseBooleanArray;
 import android.view.LayoutInflater;
 import android.view.MenuItem;
+import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
-import android.webkit.SslErrorHandler;
-import android.webkit.WebChromeClient;
-import android.webkit.WebResourceError;
-import android.webkit.WebResourceRequest;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import android.widget.ArrayAdapter;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -36,34 +26,51 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
+import androidx.annotation.OptIn;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.media3.common.MediaItem;
-import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.VideoSize;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.datasource.DataSource;
+import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.datasource.okhttp.OkHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.hls.HlsMediaSource;
+import androidx.media3.exoplayer.source.MediaSource;
+import androidx.media3.exoplayer.source.ProgressiveMediaSource;
 
 import com.boolint.camlocation.bean.CctvItemVo;
 import com.boolint.camlocation.helper.ADHelper;
 import com.boolint.camlocation.helper.CctvApiHelper;
+import com.boolint.camlocation.helper.CctvVideoManager;
 import com.boolint.camlocation.helper.DaeguCctvVideoOpenApiHelper;
 import com.boolint.camlocation.helper.DeviceHelper;
 import com.boolint.camlocation.helper.GgCctvVideoOpenApiHelper;
 import com.boolint.camlocation.helper.SeoulCctvVideoOpenApiHelper;
 
+import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+
+import okhttp3.OkHttpClient;
 
 public class RevSearchGridActivity extends AppCompatActivity {
 
-    private static final String TAG = "TestSearchGridActivity";
-
-    private static final int MESSAGE_CCTV_EXOPLAYER = 101;
-    private static final int MESSAGE_CCTV_WEBVIEW = 102;
+    private static final String TAG = "RevSearchGridActivity";
+    private static final int MESSAGE_CCTV_PLAY = 101;
 
     private LinearLayout llProgress;
     private ZoomGridView grGridView;
@@ -81,6 +88,16 @@ public class RevSearchGridActivity extends AppCompatActivity {
     // 각 아이템의 ExoPlayer 관리
     private SparseArray<ExoPlayer> exoPlayerMap = new SparseArray<>();
     private SparseArray<Surface> surfaceMap = new SparseArray<>();
+
+    // UTIC URL 추출용 CctvVideoManager 관리
+    private SparseArray<CctvVideoManager> videoManagerMap = new SparseArray<>();
+
+    // 아이템 클릭 리스너
+    private OnGridItemClickListener gridItemClickListener;
+
+    public interface OnGridItemClickListener {
+        void onItemClick(CctvItemVo item, int position);
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -100,6 +117,7 @@ public class RevSearchGridActivity extends AppCompatActivity {
 
         initializeViews();
         setupGridView();
+        setupGridItemClickListener();
         loadNearbyCctvList();
     }
 
@@ -123,8 +141,28 @@ public class RevSearchGridActivity extends AppCompatActivity {
         grGridView.setNumColumns(numColumns);
     }
 
+    /**
+     * 그리드 아이템 클릭 리스너 설정
+     */
+    private void setupGridItemClickListener() {
+        gridItemClickListener = (item, position) -> {
+            Log.d(TAG, "Grid item clicked: " + item.getCctvName() + ", position=" + position);
+
+            // TODO: 클릭 시 동작 구현
+            // 예: RevVideoActivity로 이동
+            // MainData.mCurrentCctvItemVo = item;
+            // Intent intent = new Intent(this, RevVideoActivity.class);
+            // startActivity(intent);
+
+            Toast.makeText(this, item.getCctvName() + " 선택됨", Toast.LENGTH_SHORT).show();
+        };
+    }
+
     private void loadNearbyCctvList() {
         for (CctvItemVo vo : MainData.mCctvList) {
+            if ("busan".equals(vo.getRoadType())) continue;
+            if ("daegu".equals(vo.getRoadType())) continue;
+            if ("gg".equals(vo.getRoadType())) continue;
             mList.add(vo);
         }
 
@@ -187,39 +225,40 @@ public class RevSearchGridActivity extends AppCompatActivity {
     private void loadAllCctvVideos() {
         mThreadCount = searchList.size();
 
-        for (CctvItemVo vo : searchList) {
+        for (int i = 0; i < searchList.size(); i++) {
+            CctvItemVo vo = searchList.get(i);
             if (vo != null) {
-                loadCctvVideoByType(vo);
+                loadCctvVideoByType(vo, i);
             }
         }
     }
 
-    private void loadCctvVideoByType(CctvItemVo vo) {
+    private void loadCctvVideoByType(CctvItemVo vo, int position) {
         String roadType = vo.getRoadType();
 
         switch (roadType) {
             case "seoul":
-                startSeoulCctvVideo(vo);
+                loadSeoulCctv(vo);
                 break;
             case "jeju":
-                startJejuCctvVideo(vo);
+                loadJejuCctv(vo);
                 break;
             case "gg":
-                startGgCctvVideo(vo);
+                loadGgCctv(vo);
                 break;
             case "daegu":
-                startDaeguCctvVideo(vo);
+                loadDaeguCctv(vo);
                 break;
             case "utic":
-                startUticCctvVideoWithApi(vo);
+                loadUticCctv(vo, position);
                 break;
             default:
-                startCctvVideo(vo);
+                loadDefaultCctv(vo);
                 break;
         }
     }
 
-    private void startCctvVideo(CctvItemVo vo) {
+    private void loadDefaultCctv(CctvItemVo vo) {
         new Thread(() -> {
             try {
                 sendSuccessMessage();
@@ -230,7 +269,7 @@ public class RevSearchGridActivity extends AppCompatActivity {
         }).start();
     }
 
-    private void startSeoulCctvVideo(CctvItemVo vo) {
+    private void loadSeoulCctv(CctvItemVo vo) {
         new Thread(() -> {
             try {
                 vo.cctvUrl = SeoulCctvVideoOpenApiHelper.getSeoulCctvUrl(vo.roadSectionId);
@@ -242,7 +281,7 @@ public class RevSearchGridActivity extends AppCompatActivity {
         }).start();
     }
 
-    private void startJejuCctvVideo(CctvItemVo vo) {
+    private void loadJejuCctv(CctvItemVo vo) {
         new Thread(() -> {
             try {
                 sendSuccessMessage();
@@ -253,7 +292,7 @@ public class RevSearchGridActivity extends AppCompatActivity {
         }).start();
     }
 
-    private void startGgCctvVideo(CctvItemVo vo) {
+    private void loadGgCctv(CctvItemVo vo) {
         new Thread(() -> {
             try {
                 String tempUrl = GgCctvVideoOpenApiHelper.getUrl1(vo.roadSectionId);
@@ -266,7 +305,7 @@ public class RevSearchGridActivity extends AppCompatActivity {
         }).start();
     }
 
-    private void startDaeguCctvVideo(CctvItemVo vo) {
+    private void loadDaeguCctv(CctvItemVo vo) {
         new Thread(() -> {
             try {
                 vo.cctvUrl = DaeguCctvVideoOpenApiHelper.getUrl(vo.roadSectionId);
@@ -278,40 +317,81 @@ public class RevSearchGridActivity extends AppCompatActivity {
         }).start();
     }
 
-    private void startUticCctvVideoWithApi(CctvItemVo vo) {
+    private void loadUticCctv(CctvItemVo vo, int position) {
+        Log.d(TAG, "🚀 UTIC CCTV 로드: " + vo.roadSectionId + ", position=" + position);
+
         apiHelper.getCctvInfo(vo.roadSectionId, new CctvApiHelper.CctvResponseListener() {
             @Override
             public void onSuccess(CctvApiHelper.CctvInfo cctvInfo) {
-                vo.cctvUrl = cctvInfo.getStreamPageUrl();
-                vo.isWebViewPlayer = true;
-                sendSuccessMessage();
+                if (isFinishing() || isDestroyed()) {
+                    sendErrorMessage();
+                    return;
+                }
+
+                Log.d(TAG, "✅ CCTV 정보 받음: " + cctvInfo.toString());
+                String pageUrl = cctvInfo.getStreamPageUrl();
+                Log.d(TAG, "✅ Stream Page URL: " + pageUrl);
+
+                // CctvVideoManager로 실제 스트림 URL 추출
+                CctvVideoManager manager = new CctvVideoManager(getApplicationContext());
+                videoManagerMap.put(position, manager);
+
+                manager.extract(pageUrl, new CctvVideoManager.OnVideoReadyListener() {
+                    @Override
+                    public void onVideoReady(String videoUrl, CctvVideoManager.SourceType sourceType) {
+                        Log.d(TAG, "✅ onVideoReady: " + videoUrl + ", position=" + position);
+                        vo.cctvUrl = videoUrl;
+
+                        // 즉시 매니저 해제
+                        //videoManagerMap.get(position).destroy();
+                        //videoManagerMap.remove(position);
+                        // ⭐ 즉시 매니저 해제 (WebView 리소스 정리)
+                        releaseVideoManager(position);
+
+                        sendSuccessMessage();
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        Log.e(TAG, "❌ 영상 추출 실패: " + message);
+
+                        // ⭐ 즉시 매니저 해제 (WebView 리소스 정리)
+                        releaseVideoManager(position);
+
+                        sendErrorMessage();
+                    }
+                });
             }
 
             @Override
             public void onFailure(String error) {
+                Log.e(TAG, "❌ CCTV 정보 로드 실패: " + error);
                 sendErrorMessage();
             }
         });
     }
 
+    private void releaseVideoManager(int position) {
+        CctvVideoManager manager = videoManagerMap.get(position);
+        if (manager != null) {
+            manager.destroy();
+            videoManagerMap.remove(position);
+            Log.d(TAG, "🗑️ VideoManager 해제: position=" + position);
+        }
+    }
+
     private void sendSuccessMessage() {
-        Message msg = handler.obtainMessage();
-        msg.what = 100;
-        handler.sendMessage(msg);
+        handler.obtainMessage(MESSAGE_CCTV_PLAY).sendToTarget();
     }
 
     private void sendErrorMessage() {
-        Message msg = handler.obtainMessage();
-        msg.what = -100;
-        handler.sendMessage(msg);
+        handler.obtainMessage(-1).sendToTarget();
     }
 
     private final Handler handler = new Handler(Looper.getMainLooper()) {
         @Override
         public void handleMessage(Message msg) {
-            if (msg.what == 100 || msg.what == -100) {
-                mThreadCount--;
-            }
+            mThreadCount--;
 
             if (mThreadCount == 0) {
                 grGridView.setAdapter(new SearchAdapter(
@@ -335,10 +415,21 @@ public class RevSearchGridActivity extends AppCompatActivity {
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        Log.d(TAG, "🔄 onConfigurationChanged: " + newConfig.orientation);
+
         DeviceHelper.setOrientationPhoneToPortrait(this);
 
+        // 태블릿에서 회전 시 컬럼 수가 변경됨 (2열 ↔ 3열)
         int numColumns = getGridColumnCount();
         grGridView.setNumColumns(numColumns);
+
+        // 회전 시 TextureView의 Surface가 무효화되므로 ExoPlayer 재초기화 필요
+        releaseAllExoPlayers();
+
+        // Adapter 재설정하여 플레이어 다시 초기화
+        if (!searchList.isEmpty()) {
+            grGridView.setAdapter(new SearchAdapter(this, 0, searchList));
+        }
     }
 
     @Override
@@ -366,8 +457,22 @@ public class RevSearchGridActivity extends AppCompatActivity {
             handler.removeCallbacksAndMessages(null);
         }
 
+        releaseAllVideoManagers();
         releaseAllExoPlayers();
-        releaseGridViewResources();
+    }
+
+    private void releaseAllVideoManagers() {
+        for (int i = 0; i < videoManagerMap.size(); i++) {
+            CctvVideoManager manager = videoManagerMap.valueAt(i);
+            if (manager != null) {
+                try {
+                    manager.destroy();
+                } catch (Exception e) {
+                    Log.e(TAG, "Error releasing CctvVideoManager", e);
+                }
+            }
+        }
+        videoManagerMap.clear();
     }
 
     private void releaseAllExoPlayers() {
@@ -399,31 +504,6 @@ public class RevSearchGridActivity extends AppCompatActivity {
         surfaceMap.clear();
     }
 
-    private void releaseGridViewResources() {
-        if (grGridView == null) return;
-
-        try {
-            int childCount = grGridView.getChildCount();
-            for (int i = 0; i < childCount; i++) {
-                View itemView = grGridView.getChildAt(i);
-                if (itemView == null) continue;
-
-                WebView webView = itemView.findViewById(R.id.webview);
-                if (webView != null) {
-                    webView.onPause();
-                    webView.loadUrl("about:blank");
-                    webView.stopLoading();
-                    webView.clearHistory();
-                    webView.clearCache(true);
-                    webView.removeAllViews();
-                    webView.destroy();
-                }
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Error releasing GridView resources", e);
-        }
-    }
-
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         int id = item.getItemId();
@@ -436,15 +516,105 @@ public class RevSearchGridActivity extends AppCompatActivity {
     }
 
     // ============================================================================
+    // 한강 SSL 우회 관련 메서드
+    // ============================================================================
+
+    @OptIn(markerClass = UnstableApi.class)
+    private MediaSource createMediaSource(String url) {
+        DataSource.Factory dataSourceFactory = createDataSourceFactory(url);
+        MediaItem mediaItem = MediaItem.fromUri(url);
+        String lowerUrl = url.toLowerCase();
+
+        if (lowerUrl.contains(".m3u8") || lowerUrl.contains(".m3u")) {
+            Log.d(TAG, "🎬 HLS 모드");
+            return new HlsMediaSource.Factory(dataSourceFactory)
+                    .createMediaSource(mediaItem);
+        } else {
+            Log.d(TAG, "🎬 Progressive 모드 (MP4)");
+            return new ProgressiveMediaSource.Factory(dataSourceFactory)
+                    .createMediaSource(mediaItem);
+        }
+    }
+
+    @OptIn(markerClass = UnstableApi.class)
+    private DataSource.Factory createDataSourceFactory(String url) {
+        if (url.contains("hrfco.go.kr")) {
+            Log.d(TAG, "🌊 한강 모드 (SSL 우회 + Origin 헤더)");
+            return createHrfcoDataSourceFactory();
+        } else {
+            Log.d(TAG, "📡 일반 모드");
+            return createDefaultDataSourceFactory();
+        }
+    }
+
+    @OptIn(markerClass = UnstableApi.class)
+    private OkHttpDataSource.Factory createHrfcoDataSourceFactory() {
+        OkHttpClient client = createUnsafeOkHttpClient();
+        OkHttpDataSource.Factory factory = new OkHttpDataSource.Factory(client);
+
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Origin", "http://hrfco.go.kr");
+        headers.put("Referer", "http://hrfco.go.kr/");
+        headers.put("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/140.0.0.0 Mobile Safari/537.36");
+        factory.setDefaultRequestProperties(headers);
+
+        return factory;
+    }
+
+    @OptIn(markerClass = UnstableApi.class)
+    private DefaultHttpDataSource.Factory createDefaultDataSourceFactory() {
+        DefaultHttpDataSource.Factory factory = new DefaultHttpDataSource.Factory();
+        factory.setUserAgent("Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/140.0.0.0 Mobile Safari/537.36");
+        factory.setAllowCrossProtocolRedirects(true);
+        factory.setConnectTimeoutMs(15000);
+        factory.setReadTimeoutMs(15000);
+        return factory;
+    }
+
+    private OkHttpClient createUnsafeOkHttpClient() {
+        try {
+            TrustManager[] trustAllCerts = new TrustManager[]{
+                    new X509TrustManager() {
+                        @Override
+                        public void checkClientTrusted(X509Certificate[] chain, String authType) {}
+
+                        @Override
+                        public void checkServerTrusted(X509Certificate[] chain, String authType) {}
+
+                        @Override
+                        public X509Certificate[] getAcceptedIssuers() {
+                            return new X509Certificate[0];
+                        }
+                    }
+            };
+
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, trustAllCerts, new SecureRandom());
+
+            return new OkHttpClient.Builder()
+                    .sslSocketFactory(sslContext.getSocketFactory(), (X509TrustManager) trustAllCerts[0])
+                    .hostnameVerifier((hostname, session) -> true)
+                    .connectTimeout(15, TimeUnit.SECONDS)
+                    .readTimeout(15, TimeUnit.SECONDS)
+                    .build();
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // ============================================================================
     // SearchAdapter
     // ============================================================================
 
     private class SearchAdapter extends ArrayAdapter<CctvItemVo> {
 
         public ArrayList<CctvItemVo> items;
-
-        // ✅ 각 position별 초기화 완료 여부 추적
         private SparseBooleanArray initializedPositions = new SparseBooleanArray();
+
+        // 클릭 감지를 위한 변수
+        private static final int CLICK_THRESHOLD = 200; // ms
+        private static final int MOVE_THRESHOLD = 20; // pixels
 
         public SearchAdapter(Context context, int textViewResourceId, ArrayList<CctvItemVo> objects) {
             super(context, textViewResourceId, objects);
@@ -472,8 +642,6 @@ public class RevSearchGridActivity extends AppCompatActivity {
                 holder.llBase = convertView.findViewById(R.id.ll_base);
                 holder.frameVideoContainer = convertView.findViewById(R.id.frame_video_container);
                 holder.textureView = convertView.findViewById(R.id.textureView);
-                holder.webView = convertView.findViewById(R.id.webview);
-                holder.webviewOverlay = convertView.findViewById(R.id.webviewOverlay);
                 holder.tvTitle = convertView.findViewById(R.id.tvTitle);
                 holder.imgCctvType = convertView.findViewById(R.id.imgCctvType);
                 holder.llProgress = convertView.findViewById(R.id.ll_progress);
@@ -486,13 +654,10 @@ public class RevSearchGridActivity extends AppCompatActivity {
             } else {
                 holder = (ViewHolder) convertView.getTag();
 
-                // ✅ 같은 position이면 재초기화하지 않음
                 if (holder.position == position && initializedPositions.get(position, false)) {
-                    Log.d(TAG, "Skip re-init: position=" + position);
                     return convertView;
                 }
 
-                // 다른 position이면 이전 리소스 정리
                 if (holder.position != position) {
                     cleanupViewHolder(holder);
                 }
@@ -501,28 +666,22 @@ public class RevSearchGridActivity extends AppCompatActivity {
             CctvItemVo vo = items.get(position);
             holder.position = position;
 
-            // ✅ 이미 초기화된 position이면 스킵
             if (initializedPositions.get(position, false)) {
-                Log.d(TAG, "Already initialized: position=" + position);
                 updateUIOnly(holder, vo);
                 return convertView;
             }
-
-            // 터치 이벤트 부모로 전달
-            holder.frameVideoContainer.setClickable(false);
-            holder.frameVideoContainer.setFocusable(false);
-            holder.frameVideoContainer.setOnTouchListener((v, event) -> false);
 
             // 초기 상태
             holder.llProgress.setAlpha(1f);
             holder.llProgress.setVisibility(View.VISIBLE);
             holder.llError.setVisibility(View.GONE);
             holder.textureView.setVisibility(View.GONE);
-            holder.webView.setVisibility(View.GONE);
-            holder.webviewOverlay.setVisibility(View.GONE);
 
             // UI 설정
             updateUIOnly(holder, vo);
+
+            // 클릭 이벤트 설정 (핀치줌/팬과 공존)
+            setupClickListener(holder, vo, position);
 
             // 즐겨찾기 클릭
             holder.llFavor.setOnClickListener(v -> {
@@ -549,38 +708,71 @@ public class RevSearchGridActivity extends AppCompatActivity {
                 return convertView;
             }
 
-            // ✅ 초기화 완료 표시 (플레이어 설정 전에)
             initializedPositions.put(position, true);
 
-            // ✅ 순차적 로딩
+            // 순차적 로딩
             int delay = position * 300;
 
-            boolean useWebView = "utic".equals(vo.getRoadType()) || vo.isWebViewPlayer;
-
-            Log.d(TAG, "Scheduling player init: position=" + position + ", delay=" + delay + ", useWebView=" + useWebView);
+            Log.d(TAG, "Scheduling player init: position=" + position + ", delay=" + delay);
 
             new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                // ✅ View가 아직 유효한지 확인
                 if (holder.position != position) {
-                    Log.d(TAG, "Position changed, skip: " + position);
                     return;
                 }
-
-                if (useWebView) {
-                    setupWebViewPlayer(holder, vo, position);
-                } else {
-                    setupExoPlayer(holder, vo, position);
-                }
+                setupExoPlayer(holder, vo, position);
             }, delay);
 
             return convertView;
         }
 
         /**
-         * UI만 업데이트 (플레이어 재초기화 없이)
+         * 클릭 리스너 설정 (핀치줌/팬과 공존)
          */
+        private void setupClickListener(ViewHolder holder, CctvItemVo vo, int position) {
+            holder.frameVideoContainer.setOnTouchListener(new View.OnTouchListener() {
+                private long touchStartTime;
+                private float touchStartX, touchStartY;
+                private boolean isMoved = false;
+
+                @Override
+                public boolean onTouch(View v, MotionEvent event) {
+                    switch (event.getAction()) {
+                        case MotionEvent.ACTION_DOWN:
+                            touchStartTime = System.currentTimeMillis();
+                            touchStartX = event.getX();
+                            touchStartY = event.getY();
+                            isMoved = false;
+                            // 터치 이벤트를 부모(ZoomGridView)에게도 전달
+                            return false;
+
+                        case MotionEvent.ACTION_MOVE:
+                            float dx = Math.abs(event.getX() - touchStartX);
+                            float dy = Math.abs(event.getY() - touchStartY);
+                            if (dx > MOVE_THRESHOLD || dy > MOVE_THRESHOLD) {
+                                isMoved = true;
+                            }
+                            return false;
+
+                        case MotionEvent.ACTION_UP:
+                            long touchDuration = System.currentTimeMillis() - touchStartTime;
+
+                            // 짧은 터치 + 이동 없음 = 클릭
+                            if (touchDuration < CLICK_THRESHOLD && !isMoved) {
+                                if (gridItemClickListener != null) {
+                                    gridItemClickListener.onItemClick(vo, position);
+                                }
+                                return true;
+                            }
+                            return false;
+
+                        default:
+                            return false;
+                    }
+                }
+            });
+        }
+
         private void updateUIOnly(ViewHolder holder, CctvItemVo vo) {
-            // CCTV 타입 아이콘
             if ("ex".equals(vo.getRoadType())) {
                 holder.imgCctvType.setImageResource(R.drawable.cctvex32);
             } else if ("its".equals(vo.getRoadType())) {
@@ -591,7 +783,6 @@ public class RevSearchGridActivity extends AppCompatActivity {
 
             holder.tvTitle.setText(vo.cctvName);
 
-            // 즐겨찾기 상태
             boolean isFavor = Utils.existFavor(RevSearchGridActivity.this, vo.getRoadType(), vo.getCctvName());
             holder.imgFavor.setImageResource(isFavor ? R.drawable.favor_on : R.drawable.favor_off);
         }
@@ -600,7 +791,6 @@ public class RevSearchGridActivity extends AppCompatActivity {
             try {
                 int oldPosition = holder.position;
 
-                // 이전 ExoPlayer 정리
                 ExoPlayer oldPlayer = exoPlayerMap.get(oldPosition);
                 if (oldPlayer != null) {
                     oldPlayer.stop();
@@ -615,14 +805,6 @@ public class RevSearchGridActivity extends AppCompatActivity {
                     surfaceMap.remove(oldPosition);
                 }
 
-                // WebView 정리
-                if (holder.webView != null) {
-                    holder.webView.onPause();
-                    holder.webView.stopLoading();
-                    holder.webView.loadUrl("about:blank");
-                }
-
-                // 초기화 상태 제거
                 initializedPositions.delete(oldPosition);
 
             } catch (Exception e) {
@@ -630,16 +812,11 @@ public class RevSearchGridActivity extends AppCompatActivity {
             }
         }
 
+        @OptIn(markerClass = UnstableApi.class)
         private void setupExoPlayer(ViewHolder holder, CctvItemVo vo, int position) {
             Log.d(TAG, "setupExoPlayer: position=" + position);
 
             holder.textureView.setVisibility(View.VISIBLE);
-            holder.webView.setVisibility(View.GONE);
-            holder.webviewOverlay.setVisibility(View.GONE);
-
-            holder.textureView.setClickable(false);
-            holder.textureView.setFocusable(false);
-            holder.textureView.setOnTouchListener((v, event) -> false);
 
             ExoPlayer exoPlayer = new ExoPlayer.Builder(RevSearchGridActivity.this).build();
             exoPlayer.setRepeatMode(Player.REPEAT_MODE_ONE);
@@ -655,8 +832,6 @@ public class RevSearchGridActivity extends AppCompatActivity {
 
                 @Override
                 public void onPlaybackStateChanged(int state) {
-                    Log.d(TAG, "onPlaybackStateChanged: state=" + state + ", position=" + position);
-
                     if (state == Player.STATE_READY) {
                         holder.textureView.setVisibility(View.VISIBLE);
                         hideProgress(holder);
@@ -680,8 +855,6 @@ public class RevSearchGridActivity extends AppCompatActivity {
             holder.textureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
                 @Override
                 public void onSurfaceTextureAvailable(SurfaceTexture surfaceTexture, int width, int height) {
-                    Log.d(TAG, "onSurfaceTextureAvailable: position=" + position);
-
                     Surface surface = new Surface(surfaceTexture);
                     surfaceMap.put(position, surface);
 
@@ -717,25 +890,14 @@ public class RevSearchGridActivity extends AppCompatActivity {
             }
         }
 
+        @OptIn(markerClass = UnstableApi.class)
         private void prepareAndPlay(ExoPlayer player, CctvItemVo vo) {
             try {
-                Log.d(TAG, "prepareAndPlay: url=" + vo.getCctvUrl());
+                String url = vo.getCctvUrl();
+                Log.d(TAG, "prepareAndPlay: url=" + url);
 
-                Uri videoUri = Uri.parse(vo.getCctvUrl());
-                MediaItem mediaItem;
-
-                if (videoUri.getLastPathSegment() != null &&
-                        (videoUri.getLastPathSegment().contains(".m3u") ||
-                                videoUri.getLastPathSegment().contains(".m3u8"))) {
-                    mediaItem = new MediaItem.Builder()
-                            .setUri(videoUri)
-                            .setMimeType(MimeTypes.APPLICATION_M3U8)
-                            .build();
-                } else {
-                    mediaItem = MediaItem.fromUri(videoUri);
-                }
-
-                player.setMediaItem(mediaItem);
+                MediaSource mediaSource = createMediaSource(url);
+                player.setMediaSource(mediaSource);
                 player.prepare();
                 player.play();
 
@@ -776,208 +938,6 @@ public class RevSearchGridActivity extends AppCompatActivity {
             textureView.setTransform(matrix);
         }
 
-        @SuppressLint("SetJavaScriptEnabled")
-        private void setupWebViewPlayer(ViewHolder holder, CctvItemVo vo, int position) {
-            Log.d(TAG, "setupWebViewPlayer: position=" + position);
-
-            holder.textureView.setVisibility(View.GONE);
-            holder.webView.setVisibility(View.VISIBLE);
-            holder.webviewOverlay.setAlpha(1f);
-            holder.webviewOverlay.setVisibility(View.VISIBLE);
-
-            WebSettings ws = holder.webView.getSettings();
-            ws.setJavaScriptEnabled(true);
-            ws.setDomStorageEnabled(true);
-            ws.setMediaPlaybackRequiresUserGesture(false);
-            //ws.setCacheMode(WebSettings.LOAD_NO_CACHE);
-            //ws.setDatabaseEnabled(true);
-
-            // ✅ 캐시 사용으로 변경 (빠른 로딩)
-            ws.setCacheMode(WebSettings.LOAD_DEFAULT);
-            ws.setDatabaseEnabled(true);
-
-            holder.webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
-
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-                ws.setRenderPriority(WebSettings.RenderPriority.HIGH);
-            }
-
-            ws.setLoadsImagesAutomatically(true);
-            ws.setBlockNetworkImage(false);
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-            }
-
-            ws.setSupportZoom(false);
-            ws.setBuiltInZoomControls(false);
-            ws.setDisplayZoomControls(false);
-            ws.setUseWideViewPort(true);
-            ws.setLoadWithOverviewMode(true);
-
-            holder.webView.setVerticalScrollBarEnabled(false);
-            holder.webView.setHorizontalScrollBarEnabled(false);
-            holder.webView.setClickable(false);
-            holder.webView.setFocusable(false);
-            holder.webView.setFocusableInTouchMode(false);
-            holder.webView.setOnTouchListener((v, event) -> false);
-            holder.webView.setBackgroundColor(0xFF000000);
-
-            holder.webView.addJavascriptInterface(new WebAppInterface(holder, position), "AndroidBridge");
-
-            holder.webView.setWebChromeClient(new WebChromeClient() {
-                @Override
-                public View getVideoLoadingProgressView() {
-                    return new View(RevSearchGridActivity.this);
-                }
-
-                @Override
-                public void onProgressChanged(WebView view, int newProgress) {
-                    if (newProgress <= 10) {
-                        injectAllScripts(view);
-                    }
-                }
-            });
-
-            holder.webView.setWebViewClient(new WebViewClient() {
-                @Override
-                public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                    String url = request.getUrl().toString();
-
-                    // 같은 페이지 리로드 차단
-                    if (url.equals(view.getUrl())) {
-                        Log.d("ttt", "자동 새로고침 차단: " + url);
-                        return true; // 리로드 방지
-                    }
-                    return false;
-                }
-
-                @Override
-                public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                    // 같은 URL 리로드 차단
-                    if (url.equals(view.getUrl())) {
-                        Log.d("ttt", "자동 새로고침 차단: " + url);
-                        return true;
-                    }
-                    return false;
-                }
-                @Override
-                public void onPageStarted(WebView view, String url, Bitmap favicon) {
-                    Log.d(TAG, "WebView onPageStarted: position=" + position);
-                    injectBaseCSSImmediately(view);
-                    injectAllScripts(view);
-                }
-
-                @Override
-                public void onPageFinished(WebView view, String url) {
-                    Log.d(TAG, "WebView onPageFinished: position=" + position);
-                    injectAllScripts(view);
-
-                    view.postDelayed(() -> injectAllScripts(view), 300);
-                    view.postDelayed(() -> injectAllScripts(view), 800);
-
-                    // 타임아웃
-                    view.postDelayed(() -> {
-                        if (holder.llProgress.getVisibility() == View.VISIBLE) {
-                            hideProgress(holder);
-                        }
-                    }, 8000);
-                }
-
-                @Override
-                public void onReceivedSslError(WebView view, SslErrorHandler handler, android.net.http.SslError error) {
-                    handler.proceed();
-                }
-
-                @Override
-                public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                    super.onReceivedError(view, request, error);
-                    if (request.isForMainFrame()) {
-                        showError(holder, "로드 실패");
-                    }
-                }
-            });
-
-            holder.webView.loadUrl(vo.getCctvUrl());
-        }
-
-        private void injectBaseCSSImmediately(WebView view) {
-            String js =
-                    "javascript:(function(){ " +
-                            "if(!document.getElementById('cctv-base-style')){ " +
-                            "var s=document.createElement('style');" +
-                            "s.id='cctv-base-style';" +
-                            "s.innerHTML='" +
-                            "* { margin:0; padding:0; box-sizing:border-box; }" +
-                            "html, body { width:100%; height:100%; margin:0; padding:0; background:#000!important; overflow:hidden!important; touch-action:none!important; }" +
-                            "video { position:absolute!important; top:50%!important; left:50%!important; transform:translate(-50%,-50%)!important; max-width:100%!important; max-height:100%!important; width:100%!important; height:100%!important; object-fit:contain!important; background:black!important; pointer-events:none!important; touch-action:none!important; }" +
-                            "video::-webkit-media-controls { display:none!important; }" +
-                            "video::-webkit-media-controls-panel { display:none!important; }" +
-                            "video::-webkit-media-controls-play-button { display:none!important; }" +
-                            "video::-webkit-media-controls-start-playback-button { display:none!important; opacity:0!important; }" +
-                            "video::-webkit-media-controls-overlay-play-button { display:none!important; opacity:0!important; }" +
-                            "';" +
-                            "document.head.appendChild(s);" +
-                            "}})();";
-
-            view.evaluateJavascript(js, null);
-        }
-
-        private void injectAllScripts(WebView view) {
-            String js =
-                    "javascript:(function(){ " +
-                            "if(!document.getElementById('cctv-base-style')){ " +
-                            "var s=document.createElement('style');" +
-                            "s.id='cctv-base-style';" +
-                            "s.innerHTML='" +
-                            "* { margin:0; padding:0; box-sizing:border-box; }" +
-                            "html, body { width:100%; height:100%; margin:0; padding:0; background:#000!important; overflow:hidden!important; touch-action:none!important; }" +
-                            "video { position:absolute!important; top:50%!important; left:50%!important; transform:translate(-50%,-50%)!important; max-width:100%!important; max-height:100%!important; width:100%!important; height:100%!important; object-fit:contain!important; background:black!important; pointer-events:none!important; touch-action:none!important; }" +
-                            "video::-webkit-media-controls { display:none!important; }" +
-                            "video::-webkit-media-controls-panel { display:none!important; }" +
-                            "video::-webkit-media-controls-play-button { display:none!important; }" +
-                            "video::-webkit-media-controls-start-playback-button { display:none!important; opacity:0!important; }" +
-                            "video::-webkit-media-controls-overlay-play-button { display:none!important; opacity:0!important; }" +
-                            "';" +
-                            "(document.head||document.documentElement).appendChild(s);" +
-                            "}" +
-
-                            "document.querySelectorAll('video').forEach(function(v){ " +
-                            "v.controls=false;" +
-                            "v.removeAttribute('controls');" +
-                            "v.removeAttribute('poster');" +
-                            "v.poster='';" +
-                            "v.autoplay=true;" +
-                            "v.muted=true;" +
-                            "v.playsInline=true;" +
-                            "v.setAttribute('playsinline','');" +
-                            "v.setAttribute('webkit-playsinline','');" +
-                            "v.style.pointerEvents='none';" +
-                            "v.style.touchAction='none';" +
-                            "v.play().catch(function(e){});" +
-
-                            "if(!v.hasPlayingListener){" +
-                            "v.hasPlayingListener=true;" +
-
-                            "v.addEventListener('playing', function(){ " +
-                            "if(window.AndroidBridge) window.AndroidBridge.onVideoPlaying(); " +
-                            "}, {once: true});" +
-
-                            "v.addEventListener('canplay', function(){ " +
-                            "if(window.AndroidBridge) window.AndroidBridge.onVideoPlaying(); " +
-                            "}, {once: true});" +
-
-                            "v.addEventListener('loadeddata', function(){ " +
-                            "if(window.AndroidBridge) window.AndroidBridge.onVideoPlaying(); " +
-                            "}, {once: true});" +
-
-                            "}" +
-                            "});" +
-                            "})();";
-
-            view.evaluateJavascript(js, null);
-        }
-
         private void hideProgress(ViewHolder holder) {
             if (holder.llProgress.getVisibility() == View.VISIBLE) {
                 holder.llProgress.animate()
@@ -989,46 +949,14 @@ public class RevSearchGridActivity extends AppCompatActivity {
                         })
                         .start();
             }
-
-            if (holder.webviewOverlay != null && holder.webviewOverlay.getVisibility() == View.VISIBLE) {
-                holder.webviewOverlay.animate()
-                        .alpha(0f)
-                        .setDuration(150)
-                        .withEndAction(() -> {
-                            holder.webviewOverlay.setVisibility(View.GONE);
-                            holder.webviewOverlay.setAlpha(1f);
-                        })
-                        .start();
-            }
         }
 
         private void showError(ViewHolder holder, String message) {
             holder.llProgress.clearAnimation();
             holder.llProgress.setVisibility(View.GONE);
 
-            if (holder.webviewOverlay != null) {
-                holder.webviewOverlay.clearAnimation();
-                holder.webviewOverlay.setVisibility(View.GONE);
-            }
-
             holder.tvErrorMessage.setText(message);
             holder.llError.setVisibility(View.VISIBLE);
-        }
-
-        class WebAppInterface {
-            private ViewHolder holder;
-            private int position;
-
-            WebAppInterface(ViewHolder holder, int position) {
-                this.holder = holder;
-                this.position = position;
-            }
-
-            @android.webkit.JavascriptInterface
-            public void onVideoPlaying() {
-                Log.d(TAG, "WebAppInterface.onVideoPlaying: position=" + position);
-                runOnUiThread(() -> hideProgress(holder));
-            }
         }
 
         class ViewHolder {
@@ -1036,8 +964,6 @@ public class RevSearchGridActivity extends AppCompatActivity {
             LinearLayout llBase;
             FrameLayout frameVideoContainer;
             TextureView textureView;
-            WebView webView;
-            View webviewOverlay;
             TextView tvTitle;
             ImageView imgCctvType;
             LinearLayout llProgress;
@@ -1047,6 +973,4 @@ public class RevSearchGridActivity extends AppCompatActivity {
             ImageView imgFavor;
         }
     }
-
-
 }
